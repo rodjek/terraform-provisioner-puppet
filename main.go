@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/hashicorp/terraform/terraform"
 	"github.com/hashicorp/terraform/plugin"
+	"github.com/hashicorp/terraform/terraform"
 )
 
 func ResourceProvisionerBuilder() terraform.ResourceProvisioner {

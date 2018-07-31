@@ -123,29 +123,29 @@ func (p *provisioner) nixInstallPuppetAgent(output terraform.UIOutput, comm comm
 	}
 
 	err = p.runCommand(output, comm, "rm -f install.bash")
-    return err
+	return err
 }
 
 func (p *provisioner) nixRunPuppetAgent(output terraform.UIOutput, comm communicator.Communicator) error {
-    err := p.runCommand(output, comm, "puppet agent -t")
+	err := p.runCommand(output, comm, "puppet agent -t")
 
-    if err != nil {
-        errStruct, _ := err.(*remote.ExitError)
-        if errStruct.ExitStatus == 2 {
-            return nil
-        }
-        return err
-    }
+	if err != nil {
+		errStruct, _ := err.(*remote.ExitError)
+		if errStruct.ExitStatus == 2 {
+			return nil
+		}
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 func (p *provisioner) windowsInstallPuppetAgent(output terraform.UIOutput, comm communicator.Communicator) error {
-    return nil
+	return nil
 }
 
 func (p *provisioner) windowsRunPuppetAgent(output terraform.UIOutput, comm communicator.Communicator) error {
-    return nil
+	return nil
 }
 
 func (p *provisioner) runCommand(output terraform.UIOutput, comm communicator.Communicator, command string) error {
@@ -193,5 +193,5 @@ func decodeConfig(d *schema.ResourceData) (*provisioner, error) {
 		OSType:  d.Get("os_type").(string),
 	}
 
-    return p, nil
+	return p, nil
 }
