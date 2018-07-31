@@ -5,7 +5,7 @@ provider "aws" {
 }
 
 resource "aws_instance" "puppetmaster" {
-    ami = "ami-47c21a25"
+    ami = "${var.aws_ami_id}"
     instance_type = "t2.medium"
     key_name = "${var.aws_key_pair}"
 
