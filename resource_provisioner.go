@@ -4,23 +4,32 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"os"
 
 	"github.com/hashicorp/terraform/communicator"
 	"github.com/hashicorp/terraform/communicator/remote"
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/terraform"
 	"github.com/mitchellh/go-linereader"
+	"github.com/rodjek/terraform-provisioner-puppet/bolt"
+	"gopkg.in/yaml.v2"
 )
 
 type provisionFn func(terraform.UIOutput, communicator.Communicator) error
 
 type provisioner struct {
-	UseSudo bool
-	Server  string
-	OSType  string
+	UseSudo  bool
+	Server   string
+	OSType   string
+	Autosign bool
 
 	runPuppetAgent     provisionFn
 	installPuppetAgent provisionFn
+}
+
+type csrAttributes struct {
+	CustomAttributes map[string]string `yaml:"custom_attributes"`
 }
 
 func Provisioner() terraform.ResourceProvisioner {
@@ -36,6 +45,11 @@ func Provisioner() terraform.ResourceProvisioner {
 				Optional: true,
 			},
 			"use_sudo": &schema.Schema{
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+			"autosign": &schema.Schema{
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  true,
@@ -94,6 +108,22 @@ func applyFn(ctx context.Context) error {
 	}
 	defer comm.Disconnect()
 
+	csrAttrs := new(csrAttributes)
+	csrAttrs.CustomAttributes = make(map[string]string)
+
+	if config.Autosign {
+		autosignToken, err := config.generateAutosignToken(state.Attributes["private_dns"], state.Ephemeral.ConnInfo["user"])
+		if err != nil {
+			return fmt.Errorf("Failed to generate an autosign token: %s %s", err)
+		}
+		csrAttrs.CustomAttributes["challengePassword"] = autosignToken
+	}
+
+	err = config.writeCSRAttributes(csrAttrs, comm, output)
+	if err != nil {
+		return fmt.Errorf("Failed to write csr_attributes.yaml: %s", err)
+	}
+
 	err = config.installPuppetAgent(output, comm)
 	if err != nil {
 		return err
@@ -109,6 +139,45 @@ func applyFn(ctx context.Context) error {
 
 func validateFn(config *terraform.ResourceConfig) (ws []string, es []error) {
 	return ws, es
+}
+
+func (p *provisioner) writeCSRAttributes(attrs *csrAttributes, comm communicator.Communicator, output terraform.UIOutput) error {
+	file, err := ioutil.TempFile("", "puppet-crt-attrs")
+	if err != nil {
+		return fmt.Errorf("Failed to create a temp file: %s", err)
+	}
+	defer os.Remove(file.Name())
+
+	content, err := yaml.Marshal(attrs)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal CSR attributes to YAML: %s", err)
+	}
+
+	_, err = file.WriteString(string(content))
+	if err != nil {
+		return fmt.Errorf("Failed to write YAML to temp file: %s", err)
+	}
+
+	file.Seek(0, 0)
+	err = comm.Upload("/tmp/csr_attributes.yaml", file)
+	if err != nil {
+		return err
+	}
+
+	if err = p.runCommand(output, comm, "mkdir -p /etc/puppetlabs/puppet"); err != nil {
+		return err
+	}
+
+	return p.runCommand(output, comm, "mv /tmp/csr_attributes.yaml /etc/puppetlabs/puppet/")
+}
+
+func (p *provisioner) generateAutosignToken(certname string, user string) (string, error) {
+	result, err := bolt.Task("ssh://"+p.Server, user, p.UseSudo, "autosign::generate_token", map[string]string{"certname": certname})
+	if err != nil {
+		return "", err
+	}
+	// TODO check error state in JSON
+	return result.Items[0].Result["_output"], nil
 }
 
 func (p *provisioner) nixInstallPuppetAgent(output terraform.UIOutput, comm communicator.Communicator) error {
@@ -188,9 +257,10 @@ func (p *provisioner) copyOutput(output terraform.UIOutput, reader io.Reader) {
 
 func decodeConfig(d *schema.ResourceData) (*provisioner, error) {
 	p := &provisioner{
-		UseSudo: d.Get("use_sudo").(bool),
-		Server:  d.Get("server").(string),
-		OSType:  d.Get("os_type").(string),
+		UseSudo:  d.Get("use_sudo").(bool),
+		Server:   d.Get("server").(string),
+		OSType:   d.Get("os_type").(string),
+		Autosign: d.Get("autosign").(bool),
 	}
 
 	return p, nil
