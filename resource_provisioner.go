@@ -19,10 +19,13 @@ import (
 type provisionFn func(terraform.UIOutput, communicator.Communicator) error
 
 type provisioner struct {
-	UseSudo  bool
-	Server   string
-	OSType   string
-	Autosign bool
+	UseSudo    bool
+	Server     string
+	OSType     string
+	Autosign   bool
+	OpenSource bool
+
+	instanceState *terraform.InstanceState
 
 	runPuppetAgent     provisionFn
 	installPuppetAgent provisionFn
@@ -54,6 +57,11 @@ func Provisioner() terraform.ResourceProvisioner {
 				Optional: true,
 				Default:  true,
 			},
+			"open_source": &schema.Schema{
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
 		},
 		ApplyFunc:    applyFn,
 		ValidateFunc: validateFn,
@@ -69,6 +77,8 @@ func applyFn(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	config.instanceState = state
 
 	if config.OSType == "" {
 		switch conn_type := state.Ephemeral.ConnInfo["type"]; conn_type {
@@ -90,6 +100,10 @@ func applyFn(ctx context.Context) error {
 		config.installPuppetAgent = config.windowsInstallPuppetAgent
 	default:
 		return fmt.Errorf("Unsupported OS type: %s", config.OSType)
+	}
+
+	if config.OpenSource {
+		config.installPuppetAgent = config.installPuppetAgentOpenSource
 	}
 
 	comm, err := communicator.New(state)
@@ -195,8 +209,24 @@ func (p *provisioner) nixInstallPuppetAgent(output terraform.UIOutput, comm comm
 	return err
 }
 
+func (p *provisioner) installPuppetAgentOpenSource(output terraform.UIOutput, comm communicator.Communicator) error {
+	result, err := bolt.Task(
+		"ssh://"+p.instanceState.Ephemeral.ConnInfo["host"],
+		p.instanceState.Ephemeral.ConnInfo["user"],
+		p.UseSudo,
+		"puppet_agent::install",
+		nil,
+	)
+
+	if err != nil {
+		return fmt.Errorf("puppet_agent::install failed: %s\n%+v", err, result)
+	}
+
+	return nil
+}
+
 func (p *provisioner) nixRunPuppetAgent(output terraform.UIOutput, comm communicator.Communicator) error {
-	err := p.runCommand(output, comm, "puppet agent -t")
+	err := p.runCommand(output, comm, "/opt/puppetlabs/puppet/bin/puppet agent -t --server "+p.Server)
 
 	if err != nil {
 		errStruct, _ := err.(*remote.ExitError)
@@ -257,10 +287,11 @@ func (p *provisioner) copyOutput(output terraform.UIOutput, reader io.Reader) {
 
 func decodeConfig(d *schema.ResourceData) (*provisioner, error) {
 	p := &provisioner{
-		UseSudo:  d.Get("use_sudo").(bool),
-		Server:   d.Get("server").(string),
-		OSType:   d.Get("os_type").(string),
-		Autosign: d.Get("autosign").(bool),
+		UseSudo:    d.Get("use_sudo").(bool),
+		Server:     d.Get("server").(string),
+		OSType:     d.Get("os_type").(string),
+		Autosign:   d.Get("autosign").(bool),
+		OpenSource: d.Get("open_source").(bool),
 	}
 
 	return p, nil

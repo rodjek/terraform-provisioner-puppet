@@ -13,3 +13,6 @@ variable "region" {
 }
 variable "aws_key_pair" {}
 variable "aws_ami_id" {}
+
+variable "vmpooler_endpoint" {}
+variable "vmpooler_token" {}
